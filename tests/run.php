@@ -89,6 +89,24 @@ function wp_get_theme() { return false; }
 function wp_get_custom_css() { return 'body { color: red; }'; }
 function get_stylesheet() { return 'test-theme'; }
 
+class Test_WPDB {
+    public $prefix = 'wp_';
+    public $queries = [];
+    public $results = [];
+    public function get_charset_collate() { return 'DEFAULT CHARSET=utf8mb4'; }
+    public function prepare($sql, ...$args) {
+        foreach ($args as $arg) {
+            $sql = preg_replace('/%[sd]/', is_int($arg) ? (string) $arg : "'" . addslashes((string) $arg) . "'", $sql, 1);
+        }
+        return $sql;
+    }
+    public function query($sql) { $this->queries[] = $sql; return 1; }
+    public function get_results($sql, $output) { $this->queries[] = $sql; return $this->results; }
+}
+$GLOBALS['wpdb'] = new Test_WPDB();
+if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
+$_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (Macintosh) Chrome/130';
+
 $legacy = isset($argv[1]) && $argv[1] === '--legacy';
 if ($legacy) {
     function corally_wpdev_perm() { return true; }
@@ -185,7 +203,8 @@ $GLOBALS['http'][$manifest_url] = ['code' => 404, 'body' => ''];
 check(isset($updater->release()['error']), 'manifest fetch failure handled');
 
 foreach ($GLOBALS['hooks']['rest_api_init'] as $callback) { $callback(); }
-check(count($GLOBALS['routes']) === 8, 'all eight legacy method/route pairs retained');
+check(count($GLOBALS['routes']) === 9, 'eight legacy method/route pairs retained plus ai-bot-hits');
+check(isset($GLOBALS['routes']['GET corally/v1/ai-bot-hits']), 'ai-bot-hits route registered');
 foreach ($GLOBALS['routes'] as $route) {
     check(call_user_func($route['permission_callback']) === false, 'anonymous access denied');
 }
@@ -231,6 +250,61 @@ check($response->data['reactivated'] && $GLOBALS['reactivation_network'], 'netwo
 $GLOBALS['active'] = true;
 $GLOBALS['activation_result'] = new WP_Error('activation_failed', 'Activation failed');
 check(corally_wpdev_plugin_update($update_request)->status === 500, 'failed reactivation is reported');
+
+// AI crawler counter (1.6.0).
+check(!isset($GLOBALS['hooks']['shutdown']), 'human request registers no counter hook');
+check(corally_aibot_match() === '', 'browser is not a bot');
+$_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ChatGPT-User/1.0; +https://openai.com/bot)';
+check(corally_aibot_match() === 'ChatGPT-User', 'ChatGPT-User detected');
+$_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)';
+check(corally_aibot_match() === 'GPTBot', 'GPTBot detected');
+$_SERVER['HTTP_USER_AGENT'] = 'CorallyWpDeveloperBot/1.0 (+wp-audit)';
+check(corally_aibot_match() === '', 'Corally worker itself not counted');
+$_SERVER['HTTP_USER_AGENT'] = 'Mozilla/5.0 Chrome/130';
+$_SERVER['HTTP_SIGNATURE_AGENT'] = '"https://chatgpt.com"';
+check(corally_aibot_match() === 'ChatGPT-Agent', 'signed ChatGPT agent detected');
+unset($_SERVER['HTTP_SIGNATURE_AGENT']);
+$_SERVER['HTTP_USER_AGENT'] = 'Claude-User/1.0 (+https://support.anthropic.com/)';
+$_SERVER['REQUEST_URI'] = "/palvelut/seo?utm=1'x";
+$_SERVER['REMOTE_ADDR'] = '216.73.216.5';
+check(corally_aibot_boot() === 'Claude-User' && count($GLOBALS['hooks']['shutdown']) === 1, 'bot request registers one shutdown hook');
+$GLOBALS['wpdb']->queries = [];
+foreach ($GLOBALS['hooks']['shutdown'] as $callback) { $callback(); }
+$sqls = implode("\n", $GLOBALS['wpdb']->queries);
+check(strpos($sqls, 'CREATE TABLE IF NOT EXISTS `wp_corally_aibot_hits`') !== false, 'table created on first hit');
+check(get_option('corally_aibot_db') === '1', 'table creation remembered');
+check(strpos($sqls, "'Claude-User', '/palvelut/seo'") !== false && strpos($sqls, 'utm') === false, 'path stored without query string');
+check(strpos($sqls, 'ON DUPLICATE KEY UPDATE `hits` = `hits` + 1') !== false, 'hits accumulate per day');
+$GLOBALS['wpdb']->queries = [];
+corally_aibot_record('GPTBot');
+check(count(array_filter($GLOBALS['wpdb']->queries, function ($q) { return strpos($q, 'CREATE TABLE') !== false; })) === 0, 'no CREATE TABLE after first hit');
+$flags_off = new class {
+    public function get_json_params() { return ['ai_bot_counter' => false]; }
+};
+corally_wpdev_set_flags($flags_off);
+check(corally_wpdev_get_flags()->data['ai_bot_counter'] === 0, 'counter can be switched off');
+check(corally_aibot_boot() === '', 'disabled counter ignores bots');
+$flags_on = new class {
+    public function get_json_params() { return ['ai_bot_counter' => true]; }
+};
+corally_wpdev_set_flags($flags_on);
+check(corally_wpdev_get_flags()->data['ai_bot_counter'] === 1, 'counter can be switched back on');
+$GLOBALS['wpdb']->results = [
+    ['day' => '2026-10-31', 'bot' => 'GPTBot', 'path' => '/', 'status' => '200', 'hits' => '3', 'last_ip' => '1.2.3.4', 'last_seen' => '2026-10-31 08:00:00'],
+    ['day' => '2026-10-31', 'bot' => 'ClaudeBot', 'path' => '/a', 'status' => '200', 'hits' => '1', 'last_ip' => '1.2.3.5', 'last_seen' => '2026-10-31 08:00:00'],
+];
+$hits_request = new class {
+    public $params = ['since' => '2026-10-01', 'limit' => '1', 'offset' => '0'];
+    public function get_param($key) { return $this->params[$key] ?? null; }
+};
+$hits = corally_aibot_rest_hits($hits_request)->data;
+check($hits['version'] === CORALLY_WPM_VERSION && $hits['enabled'] && $hits['table'], 'hits response metadata');
+check(count($hits['rows']) === 1 && $hits['has_more'], 'hits paged by limit');
+check(strpos(end($GLOBALS['wpdb']->queries), "`day` >= '2026-10-01'") !== false, 'since filter applied');
+$hits_request->params['since'] = "2026-10-01' OR 1=1 --";
+corally_aibot_rest_hits($hits_request);
+check(strpos(end($GLOBALS['wpdb']->queries), 'OR 1=1') === false, 'invalid since rejected');
+check(in_array('Perplexity-User', $hits['tokens'], true), 'token list exposed for Corally');
 
 passthru(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__FILE__) . ' --legacy', $code);
 check($code === 0, 'legacy migration subprocess passed');
