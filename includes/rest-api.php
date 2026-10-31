@@ -57,6 +57,12 @@ add_action('rest_api_init', function () {
         'callback'            => 'corally_wpdev_plugin_update',
         'permission_callback' => 'corally_wpdev_update_perm',
     ]);
+    // v1.6.0 — tekoalyrobottien paivalaskuri (includes/ai-bot-counter.php).
+    register_rest_route('corally/v1', '/ai-bot-hits', [
+        'methods'             => 'GET',
+        'callback'            => 'corally_aibot_rest_hits',
+        'permission_callback' => 'corally_wpdev_perm',
+    ]);
 });
 
 /** Vain yllapitajille (Application Password -kayttajalla oltava manage_options). */
@@ -241,10 +247,11 @@ function corally_wpdev_cache_flush() {
 function corally_wpdev_get_flags() {
     return new WP_REST_Response([
         'suppress_log_deprecations' => (int) get_option('corally_suppress_deprecations', 0),
+        'ai_bot_counter'            => (int) get_option('corally_aibot_disabled', 0) === 1 ? 0 : 1,
     ], 200);
 }
 
-/** POST /wp-json/corally/v1/flags — aseta lippu (nyt: suppress_log_deprecations). */
+/** POST /wp-json/corally/v1/flags — aseta lippu (suppress_log_deprecations, ai_bot_counter). */
 function corally_wpdev_set_flags($request) {
     $params = $request->get_json_params();
     if (!is_array($params)) {
@@ -255,6 +262,12 @@ function corally_wpdev_set_flags($request) {
         $v = $params['suppress_log_deprecations'] ? 1 : 0;
         update_option('corally_suppress_deprecations', $v);
         $out['suppress_log_deprecations'] = $v;
+    }
+    // v1.6.0: tekoalyrobottien laskurin kill switch (oletus paalla).
+    if (array_key_exists('ai_bot_counter', $params)) {
+        $on = $params['ai_bot_counter'] ? 1 : 0;
+        update_option('corally_aibot_disabled', $on ? 0 : 1);
+        $out['ai_bot_counter'] = $on;
     }
     return new WP_REST_Response(['updated' => $out], 200);
 }

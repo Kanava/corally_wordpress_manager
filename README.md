@@ -31,13 +31,26 @@ All endpoints require `manage_options`. CSS writes also require `edit_css`, and 
 | GET | `/site-info` | WordPress/PHP/theme versions and available updates |
 | GET | `/debug-log?lines=200` | Last 1–1,000 nonempty log lines; reads at most the last 256 KiB |
 | POST | `/cache-flush` | Flush object cache and supported cache plugins |
-| GET | `/flags` | Read deprecation-log suppression |
-| POST | `/flags` | `{"suppress_log_deprecations":true}` |
+| GET | `/flags` | Read deprecation-log suppression and AI crawler counter state |
+| POST | `/flags` | `{"suppress_log_deprecations":true}`, `{"ai_bot_counter":false}` |
 | GET | `/custom-css` | Read current theme's Additional CSS |
 | POST | `/custom-css` | `{"css":"body { color: #222; }","mode":"replace"}`; also supports `append` |
 | POST | `/plugin-update` | `{"plugin":"akismet/akismet.php"}`; one installed plugin per call |
+| GET | `/ai-bot-hits?since=YYYY-MM-DD&offset=0&limit=5000` | Daily AI crawler counts (1.6.0+), see below |
 
 To update this plugin through the worker, use `{"plugin":"corally-wordpress-manager/corally-wp-developer.php"}`. Plugin updates require writable plugin files through the WordPress filesystem API. Existing response shapes are retained. Network activation is preserved when reactivation is necessary.
+
+## AI crawler counter (1.6.0)
+
+AI crawlers and AI assistants that fetch a page because a user asked about it (for example `GPTBot`, `OAI-SearchBot`, `ChatGPT-User`, `ClaudeBot`, `Claude-User`, `PerplexityBot`, `Perplexity-User`) do not run JavaScript, so page-tag analytics never sees them. The plugin counts them on the server:
+
+- Matching is a case-insensitive check of the User-Agent against `corally_aibot_tokens()` (34 tokens), plus `Signature-Agent: chatgpt.com` for ChatGPT's signed agent browser. Human visitors cause no database queries.
+- A matching request is recorded at `shutdown`, so the HTTP status is known, into `{prefix}corally_aibot_hits`: one row per UTC day, bot, path (no query string) and status, with a hit counter and the last client IP. The table is created on the first hit. Rows older than 60 days are pruned.
+- `GET /ai-bot-hits` returns rows from `since` (default: 7 days ago), paged by `offset`/`limit` (max 5,000) with `has_more`. Counts are cumulative per day, so callers should overwrite rather than add.
+- Pages served from a full-page cache (WP Rocket, nginx, Cloudflare) never reach PHP and are not counted.
+- Turn it off with `POST /flags {"ai_bot_counter": false}`. Deactivating the plugin keeps the table and the setting.
+
+Corally classifies the bots (user fetch, AI search, training, agent) and verifies the stored IP against the lists that the operators publish. When adding a token here, add it to Corally's `AiBotRegistry` as well.
 
 ## How updates work
 
@@ -71,6 +84,11 @@ To populate the initially empty repository, commit these source files (including
 You can also run the release workflow manually with an existing tag. For manual publication, run the build and attach **both** files to a stable GitHub release with the matching tag. A tag alone does not publish an update. Keep published version tags immutable; use a new version for fixes.
 
 ## Changelog
+
+### 1.6.0
+
+- Add the AI crawler counter and `GET /corally/v1/ai-bot-hits`.
+- Add the `ai_bot_counter` flag (on by default).
 
 ### 1.5.0
 
