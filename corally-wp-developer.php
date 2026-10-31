@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Corally WordPress Manager
  * Plugin URI: https://github.com/Kanava/corally_wordpress_manager
- * Description: Authenticated REST access for AI workers: site scans, logs, cache management, custom CSS and plugin updates.
- * Version: 1.5.0
+ * Description: Authenticated REST access for AI workers: site scans, logs, cache management, custom CSS, plugin updates and an AI crawler counter.
+ * Version: 1.6.0
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * Author: Ville Bergman
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('CORALLY_WPM_VERSION', '1.5.0');
+define('CORALLY_WPM_VERSION', '1.6.0');
 define('CORALLY_WPM_FILE', __FILE__);
 
 require_once __DIR__ . '/includes/class-github-updater.php';
@@ -38,6 +38,8 @@ if (function_exists('corally_wpdev_perm')) {
     add_action('network_admin_notices', 'corally_wpm_legacy_notice');
 } else {
     require_once __DIR__ . '/includes/rest-api.php';
+    require_once __DIR__ . '/includes/ai-bot-counter.php';
+    corally_aibot_boot();
 }
 
 $corally_wpm_updater = new Corally_WPM_GitHub_Updater(__FILE__);
